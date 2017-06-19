@@ -8,12 +8,6 @@
 admin:
   port: 9990
 
-telemetry:
-- kind: io.l5d.istio
-  experimental: true
-  mixerHost: 127.0.0.1
-  mixerPort: 9091
-
 routers:
 - protocol: http
   identifier:
@@ -25,5 +19,9 @@ routers:
     experimental: true
     discoveryHost: localhost
     apiserverHost: localhost
+  loggers:
+  - kind: io.l5d.istio
+    mixerHost: localhost
+    mixerPort: 9091
   servers:
   - port: 4140

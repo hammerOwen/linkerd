@@ -1,4 +1,4 @@
-package io.buoyant.telemetry.istio
+package io.buoyant.k8s.istio
 
 import com.fasterxml.jackson.databind.{DeserializationFeature, ObjectMapper}
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
@@ -6,14 +6,15 @@ import com.fasterxml.jackson.module.scala.DefaultScalaModule
 import com.fasterxml.jackson.module.scala.experimental.ScalaObjectMapper
 import com.google.local.DurationProto.Duration
 import com.twitter.finagle.buoyant.h2
+import com.twitter.finagle.http.{Request, Response}
 import com.twitter.finagle.Service
 import com.twitter.util.Future
 import istio.mixer.v1.{Attributes, Mixer, ReportRequest, ReportResponse, StringMap}
 import scala.io.Source
 
-private[telemetry] object MixerClient {
+private[istio] object MixerClient {
 
-  private[telemetry] lazy val globalDict: Seq[String] = {
+  private[this] lazy val globalDict: Seq[String] = {
     val yaml = Source.fromInputStream(
       getClass.getClassLoader.getResourceAsStream("mixer/v1/global_dictionary.yaml")
     ).mkString
@@ -25,14 +26,17 @@ private[telemetry] object MixerClient {
     mapper.readValue[Seq[String]](yaml).asInstanceOf[Seq[String]]
   }
 
-  private[telemetry] def indexOf(dict: Seq[String], str: String): Int =
+  private[this] def indexOf(dict: Seq[String], str: String): Int =
     -1 * (dict.indexOf(str) + 1)
 
-  private[telemetry] def mkReportRequest(): ReportRequest = {
+  // TODO: http1-only for now
+  private[istio] def mkReportRequest(req: Request, rsp: Option[Response]): ReportRequest = {
 
-    // TODO: build up this dictionary as requests are sent out,
+    // TODO: build up this dictionary as requests are sent out
+
+    // req.path
     val customWords = Seq[String](
-      "REQUEST_PATH",
+      req.path,
       "buoyant.svc.cluster.local",
       "app",
       "SOURCE_LABELS_APP",
@@ -45,6 +49,12 @@ private[telemetry] object MixerClient {
     // and instead use positive index integers
     val defaultWords = globalDict ++ customWords
 
+    // TODO: need to parse out:
+    // target.service
+    // source.labels[app] (or get source.uid)
+    // target.labels[app] (or get target.uid)
+    // target.labels[version] (or get target.uid)
+    // response.duration (or calculate it here?)
     ReportRequest(
       globalWordCount = Some(globalDict.length),
       defaultWords = defaultWords,
@@ -56,25 +66,27 @@ private[telemetry] object MixerClient {
           // - request_duration_count
           // - request_duration_sum
           strings = Map[Int, Int](
-            indexOf(defaultWords, "request.path") -> indexOf(defaultWords, "REQUEST_PATH"), // method in prom
+            indexOf(defaultWords, "request.path") -> indexOf(defaultWords, req.path), // method in prom
             indexOf(defaultWords, "target.service") -> indexOf(defaultWords, "buoyant.svc.cluster.local") // target in prom
           ),
           int64s = Map[Int, Long](
-            indexOf(defaultWords, "response.code") -> 200 // response_code in prom
+            indexOf(defaultWords, "response.code") -> rsp.getOrElse(
+              Response(com.twitter.finagle.http.Status.InternalServerError) // map exceptions to 500
+            ).statusCode // response_code in prom
           ),
           // TODO: send source.uid instead of labels, Mixer will populate them for us
           stringMaps = Map[Int, StringMap](
             indexOf(defaultWords, "source.labels") ->
               StringMap(
                 entries = Map[Int, Int](
-                  indexOf(defaultWords, "app") -> indexOf(defaultWords, "source.labels") // source in prom
+                  indexOf(defaultWords, "app") -> indexOf(defaultWords, "SOURCE_LABELS_APP") // source in prom
                 )
               ),
             indexOf(defaultWords, "target.labels") ->
               StringMap(
                 entries = Map[Int, Int](
                   indexOf(defaultWords, "app") -> indexOf(defaultWords, "TARGET_LABELS_APP"), // service in prom
-                  indexOf(defaultWords, "version") -> indexOf(defaultWords, "TARGET_LABELS_VERSION") // service in prom
+                  indexOf(defaultWords, "version") -> indexOf(defaultWords, "TARGET_LABELS_VERSION") // version in prom
                 )
               )
           ),
@@ -91,13 +103,13 @@ private[telemetry] object MixerClient {
   }
 }
 
-private[telemetry] case class MixerClient(
+case class MixerClient(
   service: Service[h2.Request, h2.Response]
 ) {
   import MixerClient._
 
-  def apply(): Future[ReportResponse] = {
-    val reportRequest = mkReportRequest()
+  def logHttp(req: Request, rsp: Option[Response]): Future[ReportResponse] = {
+    val reportRequest = mkReportRequest(req, rsp)
     val client = new Mixer.Client(service)
     client.report(reportRequest)
   }
