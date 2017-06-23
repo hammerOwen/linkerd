@@ -1,0 +1,25 @@
+# A fairly minimal linkerd configuration with istio logging.
+#
+# To test the Istio logger, install Istio per instructions in (../../istio/src/main/protobuf/README.md)
+#
+# Once installed, forward localhost:9091 to the mixer:
+# kubectl port-forward $(kubectl get pod -l istio=mixer -o jsonpath='{.items[0].metadata.name}') 9091:9091
+
+admin:
+  port: 9990
+
+namers:
+- kind: io.l5d.fs
+  rootDir: linkerd/examples/io.l5d.fs
+
+# HTTP protocol
+routers:
+- protocol: http
+  dtab: |
+    /svc => /#/io.l5d.fs;
+  loggers:
+  - kind: io.l5d.istio
+    mixerHost: localhost
+    mixerPort: 9091
+  servers:
+  - port: 4140

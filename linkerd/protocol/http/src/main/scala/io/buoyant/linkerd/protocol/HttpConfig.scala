@@ -9,6 +9,7 @@ import com.twitter.conversions.storage._
 import com.twitter.finagle.buoyant.PathMatcher
 import com.twitter.finagle.buoyant.linkerd.{DelayedRelease, Headers, HttpEngine, HttpTraceInitializer}
 import com.twitter.finagle.client.{AddrMetadataExtraction, StackClient}
+import com.twitter.finagle.filter.DtabStatsFilter
 import com.twitter.finagle.http.{Request, Response, param => hparam}
 import com.twitter.finagle.service.Retries
 import com.twitter.finagle.{Path, Stack, param => fparam}
@@ -34,9 +35,9 @@ class HttpInitializer extends ProtocolInitializer.Simple {
       .prepend(Headers.Dst.BoundFilter.module)
     val clientStack = Http.router.clientStack
       .prepend(http.AccessLogger.module)
-      .prepend(HttpLoggerConfig.module)
       .replace(HttpTraceInitializer.role, HttpTraceInitializer.clientModule)
       .replace(Headers.Ctx.clientModule.role, Headers.Ctx.clientModule)
+      .insertAfter(DtabStatsFilter.role, HttpLoggerConfig.module)
       .insertAfter(Retries.Role, http.StatusCodeStatsFilter.module)
       .insertAfter(AddrMetadataExtraction.Role, RewriteHostHeader.module)
 
@@ -211,7 +212,9 @@ case class HttpConfig(
 
   @JsonIgnore
   private[this] val combinedLoggers = loggers.map { configs =>
-    HttpLoggerConfig.param.Logger(configs.map(_.mk()) reduce (_ andThen _))
+    HttpLoggerConfig.param.Logger { (params: Stack.Params) =>
+      configs.map(_.mk(params)).reduce(_ andThen _)
+    }
   }
   @JsonIgnore
   private[this] val combinedIdentifier = identifier.map { configs =>

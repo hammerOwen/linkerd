@@ -8,22 +8,27 @@ import io.buoyant.config.PolymorphicConfig
 
 abstract class HttpLoggerConfig extends PolymorphicConfig {
   @JsonIgnore
-  def mk(): Filter[Request, Response, Request, Response]
+  def mk(params: Stack.Params): Filter[Request, Response, Request, Response]
 }
 
 object HttpLoggerConfig {
   object param {
-    case class Logger(logger: Filter[Request, Response, Request, Response])
+    case class Logger(logger: (Stack.Params) => Filter[Request, Response, Request, Response])
     implicit object Logger extends Stack.Param[Logger] {
-      val default = Logger(Filter.identity)
+      val default = Logger((stack: Stack.Params) => Filter.identity)
     }
   }
 
-  val module: Stackable[ServiceFactory[Request, Response]] =
-    new Stack.Module1[HttpLoggerConfig.param.Logger, ServiceFactory[Request, Response]] {
-      val role = Stack.Role("LOGGER")
-      val description = "logger desc"
-      def make(loggerP: HttpLoggerConfig.param.Logger, factory: ServiceFactory[Request, Response]): ServiceFactory[Request, Response] =
-        loggerP.logger.andThen(factory)
+  def module: Stackable[ServiceFactory[Request, Response]] =
+    new Stack.Module[ServiceFactory[Request, Response]] {
+      override val role = Stack.Role("HttpLogger")
+      override val description = "HTTP Logger"
+      override val parameters = Seq(implicitly[Stack.Param[HttpLoggerConfig.param.Logger]])
+      def make(params: Stack.Params, stack: Stack[ServiceFactory[Request, Response]]): Stack[ServiceFactory[Request, Response]] = {
+        val loggerP = params[HttpLoggerConfig.param.Logger]
+        val filter = loggerP.logger(params)
+        val svcFactory = filter.andThen(stack.make(params))
+        Stack.Leaf(role, svcFactory)
+      }
     }
 }
